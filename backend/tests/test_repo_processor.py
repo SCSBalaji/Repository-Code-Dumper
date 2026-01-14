@@ -147,6 +147,46 @@ class TestRepoProcessor:
             assert "[BINARY FILE SKIPPED]" in result
             os.unlink(f.name)
     
+    def test_process_file_captures_metadata(self):
+        """Test that processing a file captures metadata."""
+        processor = RepoProcessor("https://github.com/user/repo")
+        
+        with tempfile.NamedTemporaryFile(suffix='.py', mode='w', delete=False) as f:
+            f.write("line1\nline2\nline3")
+            f.flush()
+            temp_name = f.name
+        
+        try:
+            processor.process_file(Path(temp_name), "test.py")
+            
+            assert len(processor.file_metadata) == 1
+            metadata = processor.file_metadata[0]
+            assert metadata["path"] == "test.py"
+            assert metadata["language"] == "python"
+            assert metadata["line_count"] == 3
+            assert metadata["status"] == "processed"
+        finally:
+            os.unlink(temp_name)
+    
+    def test_process_binary_file_captures_metadata(self):
+        """Test that processing a binary file captures binary status in metadata."""
+        processor = RepoProcessor("https://github.com/user/repo")
+        
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\n")
+            f.flush()
+            temp_name = f.name
+        
+        try:
+            processor.process_file(Path(temp_name), "image.png")
+            
+            assert len(processor.file_metadata) == 1
+            metadata = processor.file_metadata[0]
+            assert metadata["path"] == "image.png"
+            assert metadata["status"] == "binary"
+        finally:
+            os.unlink(temp_name)
+    
     @patch('subprocess.run')
     def test_clone_repository_success(self, mock_run):
         """Test successful repository clone."""
