@@ -10,6 +10,8 @@ This guide covers all Docker-related setup and configuration for the Repository 
 - [Building Images](#building-images)
 - [Running Services](#running-services)
 - [Managing Containers](#managing-containers)
+- [Development Workflow](#development-workflow)
+- [Making Code Changes](#making-code-changes)
 - [Troubleshooting](#troubleshooting)
 - [Production Configuration](#production-configuration)
 
@@ -289,6 +291,516 @@ docker cp repo-dumper-backend:/app/outputs/file.md ./
 # Copy from host to container
 docker cp ./file.txt repo-dumper-backend:/app/
 ```
+
+## Development Workflow
+
+### Local Development with Hot Reload
+
+For active development, you can set up a workflow where code changes are immediately reflected without rebuilding images.
+
+#### Backend Development Setup
+
+**Option 1: Volume Mounting (Development Mode)**
+
+Create `docker-compose.dev.yml`:
+
+```yaml
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: repo-dumper-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - OUTPUT_DIR=/app/outputs
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - output_files:/app/outputs
+      - ./backend/app:/app/app  # Mount source code
+      - ./backend/tests:/app/tests  # Mount tests
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - REACT_APP_API_URL=
+    container_name: repo-dumper-frontend-dev
+    ports:
+      - "3300:80"
+    volumes:
+      - ./frontend/src:/app/src  # Mount source code (for rebuild)
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  output_files:
+    driver: local
+```
+
+Start with development configuration:
+
+```bash
+# Start with development setup
+docker-compose -f docker-compose.dev.yml up --build
+
+# Or combine base and dev configurations
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+**How it works:**
+- Backend code changes are automatically detected and the server reloads (thanks to `--reload` flag)
+- No need to rebuild the image for Python code changes
+- Changes to `requirements.txt` still require a rebuild
+
+**Option 2: Local Development (No Docker for Backend)**
+
+Run backend locally and frontend in Docker:
+
+```bash
+# Terminal 1: Run backend locally
+cd backend
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+export OUTPUT_DIR=./outputs
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: Run frontend in Docker
+cd frontend
+docker build -t repo-dumper-frontend .
+docker run -p 3300:80 repo-dumper-frontend
+```
+
+**Benefits:**
+- Instant code changes for backend (Python)
+- Easier debugging with IDE
+- Direct access to Python environment
+
+#### Frontend Development Setup
+
+**Option 1: Development Server (Recommended)**
+
+Run React development server locally:
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+Access at `http://localhost:3000` with hot module replacement (HMR).
+
+**Option 2: Docker with Volume Mounting**
+
+For frontend in Docker with live reload, you need to run the development server instead of production build:
+
+Create `frontend/Dockerfile.dev`:
+
+```dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install
+
+COPY . .
+
+ENV REACT_APP_API_URL=
+
+EXPOSE 3000
+
+CMD ["npm", "start"]
+```
+
+Update `docker-compose.dev.yml`:
+
+```yaml
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: repo-dumper-frontend-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - /app/node_modules  # Prevent overwriting node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true  # For file watching in Docker
+    depends_on:
+      - backend
+```
+
+## Making Code Changes
+
+This section explains how to make changes to the codebase and have them reflected in your Docker containers without storing anything in local personal storage.
+
+### Understanding the Architecture
+
+The application consists of:
+1. **Backend** (Python/FastAPI): API server in `backend/` directory
+2. **Frontend** (React): Web interface in `frontend/` directory
+3. **Docker Images**: Built from Dockerfiles containing your code
+4. **Docker Containers**: Running instances of the images
+5. **Volumes**: Persistent storage for output files (not code)
+
+### Making Backend Changes
+
+#### Step 1: Edit Code
+
+Edit any file in the `backend/` directory:
+- `backend/app/main.py` - Main API endpoints
+- `backend/app/validators.py` - URL validation
+- `backend/app/repo_processor.py` - Repository processing logic
+- `backend/app/output_formatter.py` - Output formatting
+- `backend/app/models.py` - Data models
+- `backend/app/config.py` - Configuration
+- `backend/app/middleware.py` - Middleware
+
+#### Step 2: Rebuild Backend Image
+
+After making changes, rebuild the backend image:
+
+```bash
+# Rebuild and restart backend only
+docker-compose up --build backend -d
+
+# Or rebuild all services
+docker-compose up --build -d
+```
+
+**What happens:**
+1. Docker reads the `backend/Dockerfile`
+2. Copies your updated code into the new image
+3. Installs dependencies if `requirements.txt` changed
+4. Stops the old container
+5. Starts a new container with updated code
+
+#### Step 3: Verify Changes
+
+```bash
+# Check backend logs
+docker-compose logs -f backend
+
+# Test the API
+curl http://localhost:8000/health
+
+# Or visit in browser
+# http://localhost:8000/docs
+```
+
+### Making Frontend Changes
+
+#### Step 1: Edit Code
+
+Edit any file in the `frontend/` directory:
+- `frontend/src/App.js` - Main application component
+- `frontend/src/components/` - React components
+- `frontend/src/index.css` - Styles
+
+#### Step 2: Rebuild Frontend Image
+
+```bash
+# Rebuild and restart frontend only
+docker-compose up --build frontend -d
+```
+
+**What happens:**
+1. Docker reads the `frontend/Dockerfile`
+2. Installs npm dependencies if `package.json` changed
+3. Copies your updated source code
+4. Builds the React app (`npm run build`)
+5. Creates production-ready static files
+6. Copies them to nginx container
+7. Starts new container serving updated code
+
+#### Step 3: Verify Changes
+
+Visit `http://localhost:3300` (or configured port) in your browser and verify your changes.
+
+### Workflow for Rapid Development
+
+For rapid iteration, use the development workflow with volume mounting:
+
+#### Backend Hot Reload
+
+```bash
+# Create docker-compose.dev.yml (if not exists)
+cat > docker-compose.dev.yml << 'EOF'
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: repo-dumper-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - OUTPUT_DIR=/app/outputs
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - output_files:/app/outputs
+      - ./backend/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+volumes:
+  output_files:
+    driver: local
+EOF
+
+# Start backend in dev mode
+docker-compose -f docker-compose.dev.yml up backend -d
+
+# Now edit backend code - changes auto-reload!
+# Watch logs to see reloads
+docker-compose -f docker-compose.dev.yml logs -f backend
+```
+
+**With this setup:**
+- Edit Python files in `backend/app/`
+- Save the file
+- Server automatically reloads (watch logs for "Detected file change" message)
+- **No rebuild needed!**
+
+**Limitations:**
+- Changes to `requirements.txt` still require rebuild
+- Changes to files outside `/app/app` require rebuild
+
+#### Frontend Live Development
+
+For frontend, use local development server:
+
+```bash
+cd frontend
+
+# Install dependencies (first time only)
+npm install
+
+# Start development server
+npm start
+```
+
+**With this setup:**
+- Edit files in `frontend/src/`
+- Save the file
+- Browser automatically refreshes
+- **No rebuild or Docker needed!**
+
+### Making Configuration Changes
+
+#### Environment Variables
+
+Edit `.env` file or update `docker-compose.yml`:
+
+```yaml
+services:
+  backend:
+    environment:
+      - OUTPUT_DIR=/app/outputs
+      - ENABLE_API_AUTH=true
+      - CODE_DUMPER_API_KEY=your-key-here
+```
+
+Restart containers to apply:
+
+```bash
+docker-compose restart backend
+```
+
+#### Docker Compose Changes
+
+Edit `docker-compose.yml` (e.g., change ports, add volumes):
+
+```bash
+# Apply changes
+docker-compose up -d
+
+# If you changed build configuration, rebuild
+docker-compose up --build -d
+```
+
+### Making Dependency Changes
+
+#### Backend Dependencies
+
+Edit `backend/requirements.txt`:
+
+```txt
+fastapi==0.115.0
+uvicorn[standard]==0.27.0
+new-package==1.0.0
+```
+
+Rebuild backend image:
+
+```bash
+docker-compose build --no-cache backend
+docker-compose up -d backend
+```
+
+The `--no-cache` flag ensures pip downloads fresh packages.
+
+#### Frontend Dependencies
+
+Edit `frontend/package.json` or run npm install:
+
+```bash
+# Option 1: Edit package.json manually and rebuild
+docker-compose build --no-cache frontend
+docker-compose up -d frontend
+
+# Option 2: Add package via npm (locally)
+cd frontend
+npm install new-package
+# Then rebuild Docker image
+docker-compose build frontend
+docker-compose up -d frontend
+```
+
+### Testing Changes
+
+#### Run Backend Tests
+
+```bash
+# Run tests in container
+docker-compose exec backend pytest
+
+# Run with verbose output
+docker-compose exec backend pytest -v
+
+# Run specific test file
+docker-compose exec backend pytest tests/test_validators.py
+
+# Run with coverage
+docker-compose exec backend pytest --cov=app
+```
+
+#### Test API Endpoints
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Process repository
+curl -X POST http://localhost:8000/process-repo \
+  -H "Content-Type: application/json" \
+  -d '{"repo_url": "https://github.com/octocat/Hello-World", "format": "markdown"}'
+```
+
+### Complete Development Cycle Example
+
+Here's a complete workflow for making a change:
+
+```bash
+# 1. Edit code
+nano backend/app/main.py
+# (Make your changes)
+
+# 2. For quick testing with hot reload (dev mode)
+docker-compose -f docker-compose.dev.yml up backend -d
+# Changes auto-reload - test immediately!
+
+# 3. When satisfied, rebuild for production
+docker-compose build backend
+docker-compose up -d backend
+
+# 4. Test the changes
+docker-compose exec backend pytest
+curl http://localhost:8000/health
+
+# 5. Check logs for any issues
+docker-compose logs -f backend
+
+# 6. If everything works, commit changes
+git add backend/app/main.py
+git commit -m "Added new feature"
+git push
+```
+
+### Important Notes
+
+**Code Storage:**
+- All code is stored in the Git repository
+- Docker images contain snapshots of your code at build time
+- **No code is stored in Docker volumes** - volumes are only for output files
+- When you rebuild an image, it copies the latest code from your filesystem
+
+**Image vs Container:**
+- **Image**: Template containing your code and dependencies (like a blueprint)
+- **Container**: Running instance of an image (like a running application)
+- Editing code changes the source files, not the image
+- You must **rebuild the image** to include code changes in new containers
+
+**Development vs Production:**
+- **Development**: Use volume mounting for instant code updates
+- **Production**: Rebuild images to create optimized, immutable deployments
+
+**Resource Usage:**
+- Volume mounting uses less disk space (no duplicate code)
+- Rebuilding creates new image layers (uses more disk space)
+- Run `docker system prune -a` periodically to clean up unused images
+
+### Best Practices for Code Changes
+
+1. **Use development mode for active coding:**
+   ```bash
+   docker-compose -f docker-compose.dev.yml up -d
+   ```
+
+2. **Test changes before committing:**
+   ```bash
+   docker-compose exec backend pytest
+   ```
+
+3. **Rebuild for production deployment:**
+   ```bash
+   docker-compose build
+   docker-compose up -d
+   ```
+
+4. **Keep dependencies minimal:**
+   - Only add necessary packages
+   - Update `requirements.txt` or `package.json`
+   - Rebuild with `--no-cache` after dependency changes
+
+5. **Use `.dockerignore`:**
+   ```
+   # backend/.dockerignore
+   __pycache__/
+   *.pyc
+   .pytest_cache/
+   .venv/
+   venv/
+   
+   # frontend/.dockerignore
+   node_modules/
+   build/
+   .git/
+   ```
+
+6. **Monitor resource usage:**
+   ```bash
+   docker stats
+   docker system df
+   ```
+
+7. **Clean up regularly:**
+   ```bash
+   # Remove unused images
+   docker image prune
+   
+   # Remove everything unused
+   docker system prune -a
+   ```
 
 ## Troubleshooting
 
