@@ -8,10 +8,11 @@ import subprocess
 import tempfile
 import shutil
 from pathlib import Path
-from typing import Generator, Tuple, Optional
+from typing import Generator, Tuple, Optional, List, Dict, Any
 import logging
 
-from .output_formatter import OutputFormatter
+from .output_formatter import OutputFormatter, get_language_from_extension
+from .config import CLONE_TIMEOUT as CONFIG_CLONE_TIMEOUT
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -81,8 +82,8 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 # Maximum repository size (50MB)
 MAX_REPO_SIZE = 50 * 1024 * 1024
 
-# Clone timeout in seconds
-CLONE_TIMEOUT = 120
+# Clone timeout in seconds (use configurable value from config)
+CLONE_TIMEOUT = CONFIG_CLONE_TIMEOUT
 
 # Maximum number of files to process
 MAX_FILE_COUNT = 5000
@@ -172,7 +173,8 @@ class RepoProcessor:
         self.temp_dir: Optional[Path] = None
         self.repo_path: Optional[Path] = None
         self.file_count = 0
-        self.processed_files = []
+        self.processed_files: List[str] = []
+        self.file_metadata: List[Dict[str, Any]] = []
     
     def clone_repository(self) -> Path:
         """
@@ -262,27 +264,47 @@ class RepoProcessor:
         Returns:
             Formatted file content string
         """
+        # Initialize file metadata
+        metadata: Dict[str, Any] = {
+            "path": relative_path,
+            "language": get_language_from_extension(relative_path),
+            "line_count": 0,
+            "size_bytes": 0,
+            "status": "processed"
+        }
+        
         # Check file size
         try:
             file_size = file_path.stat().st_size
+            metadata["size_bytes"] = file_size
             if file_size > MAX_FILE_SIZE:
+                metadata["status"] = "error"
+                self.file_metadata.append(metadata)
                 return self.formatter.format_error_file(
                     relative_path, 
                     f"File too large: {file_size / (1024*1024):.1f}MB"
                 )
         except Exception as e:
+            metadata["status"] = "error"
+            self.file_metadata.append(metadata)
             return self.formatter.format_error_file(relative_path, str(e))
         
         # Check if binary
         if is_binary_file(file_path):
+            metadata["status"] = "binary"
+            self.file_metadata.append(metadata)
             return self.formatter.format_binary_file(relative_path)
         
         # Read and format content
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
+            metadata["line_count"] = content.count('\n') + (1 if content and not content.endswith('\n') else 0)
+            self.file_metadata.append(metadata)
             return self.formatter.format_file_content(relative_path, content)
         except Exception as e:
+            metadata["status"] = "error"
+            self.file_metadata.append(metadata)
             return self.formatter.format_error_file(relative_path, str(e))
     
     def generate_output(self, output_path: Path) -> Path:
@@ -297,6 +319,10 @@ class RepoProcessor:
         """
         if not self.repo_path:
             raise RepoProcessorError("Repository not cloned yet")
+        
+        # Reset metadata
+        self.file_metadata = []
+        self.processed_files = []
         
         # Generate unique filename
         import uuid
