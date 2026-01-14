@@ -1,0 +1,9 @@
+# Repository Code Dumper - Backend Dependencies
+fastapi==0.115.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+python-multipart==0.0.18
+
+# Testing
+pytest==7.4.4
+httpx==0.26.0
