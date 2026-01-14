@@ -31,7 +31,7 @@ services:
         - REACT_APP_API_URL=
     container_name: repo-dumper-frontend
     ports:
-      - "80:80"
+      - "3300:80"
     depends_on:
       - backend
     restart: unless-stopped
