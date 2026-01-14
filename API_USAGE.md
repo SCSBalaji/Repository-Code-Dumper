@@ -871,13 +871,13 @@ request_id = response.headers.get('X-Request-ID')
 print(f"Request ID: {request_id}")
 ```
 
-### 4. Implement Retry Logic
+### 3. Implement Retry Logic
 
 Add retry logic for transient failures:
 
 ```python
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from urllib3.util.retry import Retry
 
 session = requests.Session()
 retry = Retry(
@@ -898,12 +898,16 @@ Validate URLs before sending requests:
 import re
 
 def is_valid_github_url(url):
-    pattern = r'^https?://github\.com/[\w-]+/[\w.-]+/?$'
+    # Basic GitHub URL pattern - allows common username and repo name characters
+    # GitHub allows alphanumeric, hyphens, underscores, and periods
+    pattern = r'^https?://github\.com/[\w.-]+/[\w.-]+/?$'
     return bool(re.match(pattern, url))
 
 if is_valid_github_url(repo_url):
     result = process_repository(repo_url)
 ```
+
+**Note:** This is a basic validation. For production use, consider using the API's validation which handles edge cases and verifies repository accessibility.
 
 ### 6. Set Timeouts
 

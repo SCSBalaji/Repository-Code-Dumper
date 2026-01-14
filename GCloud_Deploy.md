@@ -22,7 +22,7 @@ This comprehensive guide walks you through deploying the Repository Code Dumper 
 Before starting, ensure you have:
 
 1. **Google Account**: A valid Google account to access GCP
-2. **Payment Method**: Credit/debit card for GCP billing (free tier available)
+2. **Payment Method**: Credit/debit card for GCP billing (free tier available - includes $300 in credits for 90 days)
 3. **Domain Name**: A registered domain name (e.g., from Namecheap, GoDaddy, or Google Domains)
 4. **Basic Knowledge**: Familiarity with web applications and basic terminal commands
 
