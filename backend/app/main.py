@@ -19,8 +19,17 @@ from .validators import validate_github_url, URLValidationError
 from .repo_processor import RepoProcessor, RepoProcessorError
 
 # Output directory for generated files
-OUTPUT_DIR = Path(os.environ.get('OUTPUT_DIR', '/app/outputs'))
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# Use environment variable, or fallback to a local 'outputs' directory for development
+_default_output_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'outputs')
+OUTPUT_DIR = Path(os.environ.get('OUTPUT_DIR', _default_output_dir))
+
+try:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+except PermissionError:
+    # Fallback to temp directory if we can't create the output directory
+    import tempfile
+    OUTPUT_DIR = Path(tempfile.gettempdir()) / 'repo_dumper_outputs'
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Track processing jobs
 processing_jobs = {}
